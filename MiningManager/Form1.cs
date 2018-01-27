@@ -8,6 +8,7 @@ using System.Linq;
 using System.Collections.Generic;
 using System.Xml.Linq;
 using Newtonsoft.Json.Linq;
+using System.Resources;
 
 namespace MiningManager
 {
@@ -20,17 +21,17 @@ namespace MiningManager
 
         string ActiveCoin;
         DateTime LastChangeCoin = new DateTime(1970, 1, 1);
+        double bitcoinPrice = 0;
 
         Dictionary<string, Coin> Coins = new Dictionary<string, Coin>();
         Dictionary<string, CoinStats> Stats = new Dictionary<string, CoinStats>();
         Dictionary<string, CoinConfig> Config = new Dictionary<string, CoinConfig>();
-        string[] WorkingCoins = { };
 
         public MiningManager()
         {
             Application.CurrentCulture = new CultureInfo("en-US");
             InitializeComponent();
-            timer1.Interval = 60000;
+            timer1.Interval = 5 * 60 * 1000;
             logFile = DateTime.Now.ToString("yyyy_MM_dd_HH_mm_ss") + ".log";
             writeLog("start programm");
 
@@ -72,7 +73,6 @@ namespace MiningManager
                 CoinPanel panel = (CoinPanel)mainPanel.Controls[coin.symbol];
                 panel.setCoinConfig(config);
             }
-            DefineCoins();
         }
 
         private void MiningManager_Shown(object sender, EventArgs e)
@@ -100,23 +100,26 @@ namespace MiningManager
         private void getStats()
         {
             Application.CurrentCulture = new CultureInfo("en-US");
+            JObject bitcoinMarket = Http.GetResponce("https://api.coinmarketcap.com/v1/ticker/bitcoin/");
+            bitcoinPrice = bitcoinMarket["price_usd"].Value<double>();
             foreach (Coin coin in Coins.Values)
             {
                 JObject pool = Http.GetResponce("https://" + coin.poolName + ".hashvault.pro/api/network/stats");
                 try
                 {
-                    long diff = Int64.Parse(pool.GetValue("difficulty").ToString());
-                    double rew = Int64.Parse(pool.GetValue("value").ToString()) / coin.divider;
+                    long diff = pool["difficulty"].Value<long>();
+                    double rew = pool["value"].Value<long>() / coin.divider;
                     double priceBTC = 0;
-                    double priceUSD = 0;
 
                     if (coin.marketCapName != null && coin.marketCapName != "")
                     {
                         JObject market = Http.GetResponce("https://api.coinmarketcap.com/v1/ticker/" + coin.marketCapName + "/");
-                        priceBTC = Double.Parse(market.GetValue("price_btc").ToString());
-                        priceUSD = Double.Parse(market.GetValue("price_usd").ToString());
+                        priceBTC = market["price_btc"].Value<double>();
+                    } else
+                    {
+                        priceBTC = StockExchangeApi.getCoinPrice(coin.symbol);
                     }
-                    CoinStats stats = new CoinStats(diff, rew, priceBTC, priceUSD);
+                    CoinStats stats = new CoinStats(diff, rew, priceBTC, bitcoinPrice);
                     Stats[coin.symbol] = stats;
                 }
                 catch { }
@@ -132,39 +135,58 @@ namespace MiningManager
                 if (panel != null) panel.setCoinStats(stats);
             }
             setActiveCoin();
-        }
-
-        private void DefineCoins()
-        {
-            WorkingCoins = new string[] { };
-            foreach (Coin coin in Coins.Values)
-            {
-                CoinConfig coinConfig = Config[coin.symbol];
-                if (!coinConfig.CPU.Equals(null) && coinConfig.CPU.Length > 0 || !coinConfig.GPU.Equals(null) && coinConfig.GPU.Length > 0)
-                {
-                    string[] newCoin = { coin.symbol };
-                    WorkingCoins = WorkingCoins.Concat(newCoin).ToArray();
-                }
-            }
+            apply.Enabled = true;
         }
 
         private string getActiveCoin()
         {
             Dictionary<string, double> CoinRating = new Dictionary<string, double>();
-            foreach(Coin coin in Coins.Values)
+            Dictionary<string, double> WorkCoinRating = new Dictionary<string, double>();
+            foreach (Coin coin in Coins.Values)
             {
                 CoinPanel panel = (CoinPanel)mainPanel.Controls[coin.symbol];
                 CoinConfig cfg = Config[coin.symbol];
+                CoinRating.Add(coin.symbol, panel.getRaiting());
+            }
+            foreach (string coinSymbol in CoinRating.Keys)
+            {
+                CoinConfig cfg = Config[coinSymbol];
                 if (cfg.GPU != null && cfg.GPU.Length > 0 || cfg.CPU != null && cfg.CPU.Length > 0)
                 {
-                    double rating = panel.getRaiting();
-                    if (coin.symbol == ActiveCoin) rating *= 1.1;
-                    CoinRating.Add(coin.symbol, rating);
+                    double rating = CoinRating[coinSymbol];
+                    if (coinSymbol == ActiveCoin) rating *= 1.1;
+                    WorkCoinRating.Add(coinSymbol, rating);
                 }
             }
-            if (CoinRating.Count == 0) return null;
             CoinRating = CoinRating.OrderBy(x => x.Value).ToDictionary(x => x.Key, x => x.Value);
-            return CoinRating.Last().Key;
+            WorkCoinRating = WorkCoinRating.OrderBy(x => x.Value).ToDictionary(x => x.Key, x => x.Value);
+            string newActiveCoin = null;
+            if (WorkCoinRating.Count > 0) newActiveCoin = WorkCoinRating.Last().Key;
+            fillCoinStatusPanel(CoinRating.Keys.ToArray<string>(), newActiveCoin);
+            return newActiveCoin;
+        }
+
+        private void fillCoinStatusPanel(string[] Coins, string ActiveCoin)
+        {
+            coinStatusPanel.Controls.Clear();
+            foreach(string Coin in Coins.Reverse())
+            {
+                PictureBox pic = new PictureBox();
+                pic.Margin = new Padding(0, 0, 5, 0);
+                pic.Height = 24;
+                pic.Width = 24;
+                pic.SizeMode = PictureBoxSizeMode.StretchImage;
+                pic.Image = GetImage(Coin, Coin == ActiveCoin || ActiveCoin == null);
+                coinStatusPanel.Controls.Add(pic);
+            }
+        }
+
+        private Image GetImage(string coin, bool active = false)
+        {
+            ResourceManager rm = Properties.Resources.ResourceManager;
+            Bitmap img = (Bitmap)rm.GetObject(coin);
+            if (img != null && !active) return ToolStripRenderer.CreateDisabledImage(img);
+            return img;
         }
 
         private void setActiveCoin()
@@ -244,12 +266,14 @@ namespace MiningManager
                 XMLConfig.Root.Add(Config[coin.symbol].toXML());
             }
             XMLConfig.Save(configFile);
+            setActiveCoin();
         }
 
         private void MiningManager_Resize(object sender, EventArgs e)
         {
             mainPanel.Height = this.Height - 60;
             apply.Location = new Point(apply.Location.X, mainPanel.Height + 4);
+            coinStatusPanel.Location = new Point(0, mainPanel.Height + 2);
         }
 
         private void writeLog(string msg)

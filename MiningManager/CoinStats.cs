@@ -15,12 +15,12 @@ namespace MiningManager
             this.priceBTC = 0;
             this.priceUSD = 0;
         }
-        public CoinStats(long diff, double rew, double priceBTC, double priceUSD)
+        public CoinStats(long diff, double rew, double priceBTC, double bitcoinPrice)
         {
             this.diff = diff;
             this.rew = rew;
             this.priceBTC = priceBTC;
-            this.priceUSD = priceUSD;
+            this.priceUSD = bitcoinPrice * priceBTC;
         }
         public double getDayRew(long hash)
         {

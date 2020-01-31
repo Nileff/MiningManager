@@ -104,7 +104,7 @@ namespace MiningManager
             bitcoinPrice = bitcoinMarket["price_usd"].Value<double>();
             foreach (Coin coin in Coins.Values)
             {
-                JObject pool = Http.GetResponce("https://" + coin.poolName + ".hashvault.pro/api/network/stats");
+                JObject pool = Http.GetResponce("https://api.hashvault.pro/v2/" + coin.poolName + "/network/stats");
                 try
                 {
                     long diff = pool["difficulty"].Value<long>();
